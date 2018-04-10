@@ -89,6 +89,8 @@ class SNIProxy(SocketServer.StreamRequestHandler):
                     if len(data) <= 0:
                         break
                     sock.sendall(data)
+        except socket.error, e:
+            print e
         finally:
             sock.close()
             remote.close()
@@ -96,6 +98,7 @@ class SNIProxy(SocketServer.StreamRequestHandler):
     def connect(self, addr, data, sni, ttl, event_connected, event_ready):
         try:
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            #remote.setsockopt(socket.SOL_TCP, socket.TCP_MAXSEG, 384)
             remote.settimeout(1.0)
 
             s_recv_tcp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
@@ -160,7 +163,6 @@ class SNIProxy(SocketServer.StreamRequestHandler):
         global HOSTS
         try:
             sock = self.connection
-            logging.info('connect from %s' % self.client_address[0])
             sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
             data = sock.recv(2048)
             port = 443
@@ -191,8 +193,10 @@ class SNIProxy(SocketServer.StreamRequestHandler):
             
             remote = self.remote
             if remote:
+                logging.info('%s->%s %s' % (self.client_address[0], server_name, remote.getpeername()[0]))
                 self.forward(sock, remote)
             else:
+                logging.info('%s->%s fail' % (self.client_address[0], server_name))
                 sock.close()
         except socket.error, e:
             logging.warn(e)
