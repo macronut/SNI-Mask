@@ -7,20 +7,22 @@ import struct, random
 import logging
 
 INTERFACE = ('0.0.0.0', 443)
+WAN = ''
+
 HOSTS = {
-    'api.twitter.com'    : ['104.244.45.247'],
-    'twitter.com'        : ['104.244.45.254'],
-    'mobile.twitter.com' : ['104.244.45.247', '104.244.45.255'],
-    'abs.twimg.com'      : ['104.244.43.98', '104.244.46.135', '104.244.43.130', '104.244.43.66'],
-    'pbs.twimg.com'      : ['104.244.43.98', '104.244.46.135', '104.244.43.2', '104.244.43.66'],
-    'video.twimg.com'    : ['104.244.43.98', '104.244.43.2', '104.244.43.66', '104.244.43.106'],
-    'abs-0.twimg.com'    : ['104.244.43.98', '104.244.46.135', '104.244.43.130', '104.244.43.2'],
-    'www.instagram.com'                : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
-    'i.instagram.com'                  : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
-    'graph.instagram.com'              : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
-    'scontent-sit4-1.cdninstagram.com' : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
-    'scontent-lax3-2.cdninstagram.com' : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
-    'scontent-ams3-1.cdninstagram.com' : ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',],
+    'api.twitter.com'    : (10, 0, ['104.244.45.247']),
+    'twitter.com'        : (10, 0, ['104.244.45.254']),
+    'mobile.twitter.com' : (10, 0, ['104.244.45.247', '104.244.45.255']),
+    'abs.twimg.com'      : (10, 0, ['104.244.43.98', '104.244.46.135', '104.244.43.130', '104.244.43.66']),
+    'pbs.twimg.com'      : (10, 0, ['104.244.43.98', '104.244.46.135', '104.244.43.2', '104.244.43.66']),
+    'video.twimg.com'    : (10, 0, ['104.244.43.98', '104.244.43.2', '104.244.43.66', '104.244.43.106']),
+    'abs-0.twimg.com'    : (10, 0, ['104.244.43.98', '104.244.46.135', '104.244.43.130', '104.244.43.2']),
+    'www.instagram.com'                : (10, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
+    'i.instagram.com'                  : (10, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
+    'graph.instagram.com'              : (10, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
+    'scontent-sit4-1.cdninstagram.com' : (0, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
+    'scontent-lax3-2.cdninstagram.com' : (0, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
+    'scontent-ams3-1.cdninstagram.com' : (0, 0, ['31.13.75.174', '31.13.73.172', '31.13.73.174', '31.13.72.172',]),
     }
 
 class ThreadingTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
@@ -85,13 +87,13 @@ class SNIProxy(SocketServer.StreamRequestHandler):
             while True:
                 r, w, e = select.select(fdset, [], [])
                 if sock in r:
-                    data = sock.recv(4096)
+                    data = sock.recv(32768)
                     if len(data) <= 0:
                         break
                     remote.sendall(data)
 
                 if remote in r:
-                    data = remote.recv(4096)
+                    data = remote.recv(32768)
                     if len(data) <= 0:
                         break
                     sock.sendall(data)
@@ -102,40 +104,67 @@ class SNIProxy(SocketServer.StreamRequestHandler):
             remote.close()
             
     def connect(self, addr, data, sni, ttl, event_connected, event_ready):
+        global WAN
         try:
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             #remote.setsockopt(socket.SOL_TCP, socket.TCP_MAXSEG, 384)
-            remote.settimeout(1.0)
-
-            s_recv_tcp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-            s_recv_tcp.connect(addr)
-            remote.connect(addr)
-
-            if self.remote:
-                remote.close()
-                return
+            remote.settimeout(1.5)
             
-            event_connected.set()
-            self.remote = remote
-            remote.settimeout(None)
-            
-            sockname = remote.getsockname()
-            fakedata = ' ' * len(data)
-            
-            while not self.ready:
+            if ttl > 0:
+                port = 0
+                while not self.ready:
+                    try:
+                        port = random.randint(32768, 65535)
+                        remote.bind((WAN, port))
+                        break
+                    except socket.error, e:
+                        print e
+                
+                if port == 0:
+                    remote.close()
+                    return
+                
+                s_recv_tcp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+                s_recv_tcp.bind((WAN, port))
+                s_recv_tcp.connect(addr)
+                remote.connect(addr)
+                
+                if self.remote:
+                    s_recv_tcp.close()
+                    remote.close()
+                    return
+                
+                event_connected.set()
+                self.remote = remote
+                remote.settimeout(None)
+                
+                sockname = remote.getsockname()
+                fakedata = ' ' * len(data)
+                    
                 packet = s_recv_tcp.recv(2048)
                 
                 tcp_header = packet[20:40]
                 tcph = struct.unpack(b'!HHIIBBHHH', tcp_header)
                 sport, dport, seq, aseq, headlen, flags, win, chechsum, p = tcph
+                
                 if dport != sockname[1]:
-                    continue
+                    print 'Bind Error'
+                    print remote.getpeername(), sockname, dport, sport, port
+                    s_recv_tcp.close()
+                    remote.close()
+                    return
+
+                if self.ready:
+                    s_recv_tcp.close()
+                    remote.close()
+                    return
+                
                 if ttl == 1:
                     tcp_header = struct.pack(b'!HHLLBBHHH', sockname[1], addr[1], aseq, seq, 80, 24, 454, 0, 0)
                     packet = tcp_header + fakedata
                     s_recv_tcp.sendto(packet, (addr[0], 0))
                     s_recv_tcp.sendto(packet, (addr[0], 0))
-                elif ttl > 1:
+                else:
                     s_send = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
                     iph = struct.unpack(b'!BBHHHBBH4s4s', packet[0:20])
                     ip_header = struct.pack('!BBHHHBBH4s4s' , 69, 0, 0, 47843, 16384, ttl, 6, 0, iph[9], iph[8])
@@ -148,25 +177,36 @@ class SNIProxy(SocketServer.StreamRequestHandler):
                     s_send.sendto(packet, (addr[0], 0))
                     s_send.sendto(packet, (addr[0], 0))
                     s_send.close()
-                break
-            s_recv_tcp.close()
             
-            if self.ready:
-                return
+                s_recv_tcp.close()
+                
+                if self.ready:
+                    s_recv_tcp.close()
+                    remote.close()
+                    return
             
-            remote.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
-            offset = data.find(sni) + 2
-            remote.sendall(data[:offset])
-            remote.sendall(data[offset:])
-            
+                remote.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+                offset = data.find(sni) + 2
+                remote.sendall(data[:offset])
+                remote.sendall(data[offset:])
+            else:
+                if self.remote:
+                    remote.close()
+                    return
+                event_connected.set()
+                self.remote = remote
+                remote.settimeout(None)
+                remote.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
+                remote.sendall(data)
             event_ready.set()
             self.ready = True
         except socket.error, e:
-            logging.warn(e)
+            logging.warn(sni + ' ' + str(e))
             return
      
     def handle(self):
         global HOSTS
+        server_name = ''
         try:
             sock = self.connection
             sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
@@ -181,12 +221,12 @@ class SNIProxy(SocketServer.StreamRequestHandler):
 
             threadlist = []
             if HOSTS.has_key(server_name):
-                addrlist = HOSTS[server_name]
+                ttl, mss, addrlist = HOSTS[server_name]
                 random.shuffle(addrlist)
                 count = len(addrlist)
                 for i in xrange(count):
                     addr = (addrlist[i], port)
-                    c = threading.Thread(target=self.connect, args=(addr, data, server_name, 10, event_connected, event_ready,), name="connect")
+                    c = threading.Thread(target=self.connect, args=(addr, data, server_name, ttl, event_connected, event_ready,), name="connect")
                     c.start()
                     threadlist.append(c)
                     if i < count-1:
@@ -198,6 +238,11 @@ class SNIProxy(SocketServer.StreamRequestHandler):
             event_ready.wait()
             
             remote = self.remote
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+
             if remote:
                 logging.info('%s->%s %s' % (self.client_address[0], server_name, remote.getpeername()[0]))
                 self.forward(sock, remote)
@@ -205,7 +250,7 @@ class SNIProxy(SocketServer.StreamRequestHandler):
                 logging.info('%s->%s fail' % (self.client_address[0], server_name))
                 sock.close()
         except socket.error, e:
-            logging.warn(e)
+            logging.warn(server_name + ' ' + str(e))
             sock.close()
 
 
