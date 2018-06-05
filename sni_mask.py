@@ -43,6 +43,19 @@ def checksum(msg):
         s = carry_around_add(s, w)
     return ~s & 0xffff
 
+def move_https(sock, data):
+    if data[0] == '\x16':
+        return False
+    else:
+        head = data.split('\r\n')
+        method, res, ver = head[0].split(' ', 2)
+        if method in ['GET', 'POST', 'HEAD']:
+            host = head[1][6:]
+            content = 'HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s%s\r\n\r\n' % (host, res)
+            sock.send(content)
+        sock.close()
+        return True
+
 class SNIProxy(SocketServer.StreamRequestHandler):
     remote = 0
     ready = False
@@ -110,7 +123,7 @@ class SNIProxy(SocketServer.StreamRequestHandler):
         try:
             remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             #remote.setsockopt(socket.SOL_TCP, socket.TCP_MAXSEG, 384)
-            remote.settimeout(2.0)
+            remote.settimeout(1.5)
             
             if ttl > 0:
                 s_recv_tcp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
@@ -125,9 +138,12 @@ class SNIProxy(SocketServer.StreamRequestHandler):
                 event_connected.set()
                 self.remote = remote
                 remote.settimeout(None)
-                
                 sockname = remote.getsockname()
-                fakedata = ' ' * len(data)
+
+                fakesni = 'thequickbrownfoxjumpsoverthelazydogthequickbrownfoxjumpsoverthelazydog'
+                fakesni = fakesni[struct.unpack('!I', socket.inet_aton(addr[0]))[0] % 35:]
+                fakesni = fakesni[:len(sni)-3] + '.me'
+                fakedata = data.replace(sni, fakesni)#' ' * len(data)
 
                 while not self.ready:
                     packet = s_recv_tcp.recv(2048)
@@ -172,7 +188,7 @@ class SNIProxy(SocketServer.StreamRequestHandler):
                     return
             
                 remote.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
-                offset = data.find(sni) + 2
+                offset = data.find(sni) + len(sni) / 2
                 remote.sendall(data[:offset])
                 remote.sendall(data[offset:])
             else:
@@ -198,6 +214,9 @@ class SNIProxy(SocketServer.StreamRequestHandler):
             sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
             data = sock.recv(2048)
             port = 443
+
+            if move_https(sock, data):
+                return
             
             server_name = self.parse(data)
             remote = 0
